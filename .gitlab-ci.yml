@@ -2,13 +2,13 @@
 #  plan      : Duo "EvalGate Planner" flow turns issues into eval cases (.gitlab/duo/flows)
 #  create    : Duo "EvalGate Fixer" flow writes fixes on MR branches
 #  verify    : unit tests + LLM eval gate (JUnit + Metrics reports in the MR widget)
-#  secure    : SAST, Secret Detection, Dependency Scanning + LLM red-team eval category
+#  secure    : (test stage = GitLab Security templates) SAST, Secret Detection, Dependency Scanning + LLM red-team eval category
 #  package   : container image -> GitLab Container Registry
 #  release   : GitLab Release with eval scorecard + evidence pack as assets
 #  configure : Cloud Run deploy to staging/production environments (GitLab Environments)
 #  monitor   : post-deploy canary evals; opens an incident issue on drift (also scheduled)
 #  govern    : hash-chained audit ledger + evidence pack; policy file protected by CODEOWNERS
-stages: [verify, secure, package, release, deploy, monitor, govern]
+stages: [verify, test, secure, package, release, deploy, monitor, govern]
 
 include:
   - template: Jobs/SAST.gitlab-ci.yml
