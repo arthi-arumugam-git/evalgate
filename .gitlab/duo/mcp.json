@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "evalgate": {
+      "type": "stdio",
+      "command": "python",
+      "args": ["-m", "evalgate.mcp_server"],
+      "env": {"EVALGATE_MOCK": "1"}
+    }
+  }
+}

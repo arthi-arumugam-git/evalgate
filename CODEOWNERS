@@ -1,0 +1,3 @@
+# Govern: changes to the release policy or eval suite need an owner's approval.
+/evalgate.policy.yml @arthi-arumugam
+/evals/ @arthi-arumugam

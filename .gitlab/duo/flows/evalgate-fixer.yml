@@ -1,0 +1,122 @@
+# EvalGate Fixer — custom flow for the GitLab Duo Agent Platform (flow registry v1).
+# Create it at: Project > Automate > Flows > New flow, paste this file.
+# Enable triggers: "Pipeline events" (failed pipelines on MRs) and "Mention" (@evalgate-fixer).
+# Autonomy level: SUPERVISED — agents diagnose and prepare the fix on their own;
+# a human approves the outcome (one approval gate) before anything is committed.
+version: "v1"
+environment: ambient
+components:
+  - name: "triage"
+    type: AgentComponent
+    prompt_id: "triage_prompt"
+    inputs:
+      - from: "context:goal"
+        as: "goal"
+      - from: "context:project_id"
+        as: "project_id"
+    toolset:
+      - "get_merge_request"
+      - "list_merge_request_diffs"
+      - "get_pipeline_errors"
+      - "get_job_logs"
+      - "read_file"
+      - "find_files"
+    ui_log_events: ["on_agent_final_answer", "on_tool_execution_success"]
+  - name: "fixer"
+    type: AgentComponent
+    prompt_id: "fixer_prompt"
+    inputs:
+      - from: "context:triage.final_answer"
+        as: "diagnosis"
+      - from: "context:project_id"
+        as: "project_id"
+      - from: "context:approval_gate.approval"
+        as: "human_feedback"
+    toolset: ["read_file", "edit_file", "run_command", "find_files"]
+    ui_log_events: ["on_agent_final_answer", "on_tool_execution_success"]
+  - name: "approval_gate"
+    type: HumanInputComponent
+    sends_response_to: "fixer"
+    interaction_type: "approval"
+    message_template: |
+      EvalGate Fixer prepared a fix and re-ran the eval suite locally.
+      - Approve: commit the fix to the MR branch and post the new scorecard
+      - Modify: tell the fixer what to change
+      - Reject: leave the MR blocked
+    ui_log_events: ["on_user_input_prompt", "on_user_response"]
+  - name: "publisher"
+    type: AgentComponent
+    prompt_id: "publisher_prompt"
+    inputs:
+      - from: "context:fixer.final_answer"
+        as: "fix_summary"
+      - from: "context:triage.final_answer"
+        as: "diagnosis"
+      - from: "context:project_id"
+        as: "project_id"
+    toolset: ["run_command", "create_merge_request_note", "get_merge_request"]
+    ui_log_events: ["on_agent_final_answer", "on_tool_execution_success"]
+prompts:
+  - prompt_id: "triage_prompt"
+    unit_primitives: []
+    prompt_template:
+      system: |
+        You are the EvalGate triage agent. A merge request pipeline failed the
+        LLM evaluation gate. Find the MR, read out/mr_comment.md and out/report.json
+        from the failed evalgate job log or by re-reading evals/suite.yml and the
+        changed files (app/prompt.txt, app/kb.json, app/bot.py). Identify which
+        eval cases newly fail and the single most likely root cause in the diff.
+        Output: MR iid, failing case ids, root cause (file + lines), and a
+        one-paragraph fix plan that preserves the author's intent.
+        When you have produced that summary your final answer is the summary. No further steps are needed after that.
+      user: |
+        Project ID: {{ project_id }}
+        Trigger payload: {{ goal }}
+      placeholder: history
+  - prompt_id: "fixer_prompt"
+    unit_primitives: []
+    prompt_template:
+      system: |
+        You are the EvalGate fixer agent. Apply the smallest change that makes
+        the failing eval cases pass while keeping the MR author's intent.
+        Rules: never weaken evals/suite.yml or evalgate.policy.yml; always ADD a
+        regression case to evals/suite.yml that captures the bug; then run
+        `pip install -r requirements.txt -q && EVALGATE_MOCK=1 python -m evalgate run`
+        and include the resulting scorecard. If reviewer feedback is present, apply it.
+        When the eval run passes, your final answer is the diff summary plus scorecard. No further steps are needed after that.
+      user: |
+        Project ID: {{ project_id }}
+        Diagnosis: {{ diagnosis }}
+        Reviewer feedback (may be empty): {{ human_feedback }}
+      placeholder: history
+  - prompt_id: "publisher_prompt"
+    unit_primitives: []
+    prompt_template:
+      system: |
+        You are the EvalGate publisher. Commit the approved working-tree changes
+        to the MR source branch with `git commit -am "evalgate: fix eval regression"`
+        and `git push`, then post a merge request note containing the diagnosis,
+        the fix summary and the new scorecard, ending with "Re-running pipeline".
+        When the note is posted your final answer is "published". No further steps are needed after that.
+      user: |
+        Project ID: {{ project_id }}
+        Diagnosis: {{ diagnosis }}
+        Fix: {{ fix_summary }}
+      placeholder: history
+routers:
+  - from: "triage"
+    to: "fixer"
+  - from: "fixer"
+    to: "approval_gate"
+  - from: "approval_gate"
+    condition:
+      input: "context:approval_gate.approval"
+      routes:
+        "approve": "publisher"
+        "modify": "fixer"
+        "reject": "end"
+        "default_route": "end"
+  - from: "publisher"
+    to: "end"
+flow:
+  entry_point: "triage"

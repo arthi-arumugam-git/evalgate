@@ -1,0 +1,51 @@
+# EvalGate Planner — custom flow (PLAN + CREATE stages). Trigger: Assign / Mention on an issue.
+# Reads a feature or bug issue, writes new eval cases for it, opens an MR.
+# Autonomy level: HANDS-OFF (the eval gate itself protects main).
+version: "v1"
+environment: ambient
+components:
+  - name: "planner"
+    type: AgentComponent
+    prompt_id: "planner_prompt"
+    inputs:
+      - from: "context:goal"
+        as: "goal"
+      - from: "context:project_id"
+        as: "project_id"
+      - from: "context:inputs.agent_platform_standard_context.primary_branch"
+        as: "primary_branch"
+    toolset: ["get_issue", "read_file", "edit_file", "run_command", "create_merge_request", "create_issue_note"]
+    ui_log_events: ["on_agent_final_answer", "on_tool_execution_success"]
+prompts:
+  - prompt_id: "planner_prompt"
+    unit_primitives: []
+    prompt_template:
+      system: |
+        You are the EvalGate planner. Turn the issue into acceptance tests for an
+        LLM app: 3-6 new cases in evals/suite.yml (categories: correctness,
+        hallucination, security) using expect_contains / expect_not_contains.
+        Include at least one adversarial case. Create branch evalgate/issue-<iid>
+        from {{ primary_branch }}, commit, open an MR that says "Closes #<iid>",
+        and comment on the issue with the list of cases.
+        When the MR is open your final answer is its URL. No further steps are needed after that.
+      user: |
+        Project ID: {{ project_id }}
+        Issue: {{ goal }}
+      placeholder: history
+routers:
+  - from: "planner"
+    to: "end"
+flow:
+  entry_point: "planner"
+  inputs:
+    - category: agent_platform_standard_context
+      input_schema:
+        primary_branch:
+          type: string
+          description: The default/primary branch of the repository
+        workload_branch:
+          type: string
+          description: git ref to workload branch
+        session_owner_id:
+          type: string
+          description: Human user's ID that initiated the flow

@@ -1,0 +1,125 @@
+# EvalGate pipeline — touches all 9 DevSecOps stages.
+#  plan      : Duo "EvalGate Planner" flow turns issues into eval cases (.gitlab/duo/flows)
+#  create    : Duo "EvalGate Fixer" flow writes fixes on MR branches
+#  verify    : unit tests + LLM eval gate (JUnit + Metrics reports in the MR widget)
+#  secure    : SAST, Secret Detection, Dependency Scanning + LLM red-team eval category
+#  package   : container image -> GitLab Container Registry
+#  release   : GitLab Release with eval scorecard + evidence pack as assets
+#  configure : Cloud Run deploy to staging/production environments (GitLab Environments)
+#  monitor   : post-deploy canary evals; opens an incident issue on drift (also scheduled)
+#  govern    : hash-chained audit ledger + evidence pack; policy file protected by CODEOWNERS
+stages: [verify, secure, package, release, deploy, monitor, govern]
+
+include:
+  - template: Jobs/SAST.gitlab-ci.yml
+  - template: Jobs/Secret-Detection.gitlab-ci.yml
+  - template: Jobs/Dependency-Scanning.gitlab-ci.yml
+
+variables:
+  EVALGATE_MOCK: "1"            # set to "0" + LLM_API_KEY (masked) to evaluate a real model
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.pip"
+  IMAGE: "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA"
+
+default:
+  image: python:3.12-slim
+  cache: { key: pip, paths: [.pip] }
+  before_script: [pip install -q -r requirements.txt]
+
+unit-tests:
+  stage: verify
+  script: [pytest -q --junitxml=pytest.xml]
+  artifacts: { when: always, reports: { junit: pytest.xml } }
+
+# Baseline = last successful eval report on the default branch.
+evalgate:
+  stage: verify
+  script:
+    - apt-get update -qq && apt-get install -y -qq curl >/dev/null
+    - mkdir -p baseline
+    - >
+      curl -sfL --header "JOB-TOKEN: $CI_JOB_TOKEN"
+      "$CI_API_V4_URL/projects/$CI_PROJECT_ID/jobs/artifacts/$CI_DEFAULT_BRANCH/raw/out/report.json?job=evalgate"
+      -o baseline/report.json || rm -f baseline/report.json
+    - python -m evalgate run
+  artifacts:
+    when: always
+    paths: [out/]
+    expose_as: "EvalGate scorecard"
+    reports: { junit: out/junit.xml, metrics: out/metrics.txt }
+
+llm-redteam:
+  stage: secure
+  script:
+    - python -m evalgate run --suite evals/suite.yml --out out-redteam --no-fail
+    - python -c "import json,sys;r=json.load(open('out-redteam/report.json'))['run'];s=r['by_category'].get('security',0);print('security pass rate',s);sys.exit(0 if s==1 else 1)"
+  artifacts: { when: always, paths: [out-redteam/] }
+
+container:
+  stage: package
+  image: docker:27
+  services: [docker:27-dind]
+  before_script: [echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"]
+  script:
+    - docker build --build-arg APP_VERSION=$CI_COMMIT_SHORT_SHA -t "$IMAGE" .
+    - docker push "$IMAGE"
+  rules: [{ if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH }]
+
+release:
+  stage: release
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  before_script: []
+  needs: [evalgate, container]
+  script: [echo "Releasing $CI_COMMIT_SHORT_SHA"]
+  release:
+    tag_name: "v0.1.$CI_PIPELINE_IID"
+    name: "HelpDesk v0.1.$CI_PIPELINE_IID (EvalGate: passed)"
+    description: out/evidence.md
+    assets:
+      links:
+        - name: EvalGate scorecard
+          url: "$CI_PROJECT_URL/-/jobs/artifacts/$CI_COMMIT_SHA/file/out/scorecard.html?job=evalgate"
+  rules: [{ if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH }]
+
+.deploy:
+  stage: deploy
+  image: google/cloud-sdk:slim
+  before_script: []
+  script: [sh deploy/cloudrun.sh "$SERVICE"]
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $GCP_PROJECT_ID
+
+deploy-staging:
+  extends: .deploy
+  variables: { SERVICE: helpdesk-staging }
+  environment: { name: staging, url: $STAGING_URL }
+
+canary-staging:
+  stage: monitor
+  needs: [deploy-staging]
+  script: [python -m evalgate monitor --url "$STAGING_URL"]
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $GCP_PROJECT_ID
+
+deploy-production:
+  extends: .deploy
+  needs: [canary-staging]
+  variables: { SERVICE: helpdesk }
+  environment: { name: production, url: $PRODUCTION_URL }
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $GCP_PROJECT_ID && $EVALGATE_AUTOPROMOTE == "1"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $GCP_PROJECT_ID
+      when: manual
+
+# Scheduled pipeline (CI/CD > Schedules, hourly) runs only this job.
+production-canary:
+  stage: monitor
+  script: [python -m evalgate monitor --url "$PRODUCTION_URL"]
+  rules: [{ if: $CI_PIPELINE_SOURCE == "schedule" }]
+
+audit-ledger:
+  stage: govern
+  needs: [evalgate]
+  script:
+    - python -m evalgate ledger-verify
+    - cat out/evidence.md
+  artifacts: { paths: [out/ledger.jsonl, out/evidence.md], expire_in: 1 year }

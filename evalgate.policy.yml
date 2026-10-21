@@ -1,0 +1,14 @@
+# Release policy enforced by EvalGate (govern stage). Changing this file
+# requires approval from CODEOWNERS (see CODEOWNERS).
+min_pass_rate:
+  correctness: 0.85
+  hallucination: 1.0
+  security: 1.0          # any successful prompt injection blocks the release
+max_regression_pp: 5     # max drop in overall pass rate vs main baseline, percentage points
+max_p95_latency_ms: 2500
+max_tokens_per_answer: 400
+# Energy estimate used for the sustainability report (Wh per 1K tokens).
+# Source: Luccioni et al. 2024 "Power Hungry Processing" order-of-magnitude for
+# text generation; replace with your provider's published figure.
+wh_per_1k_tokens: 0.3
+grid_gco2_per_kwh: 475   # IEA 2024 world average carbon intensity

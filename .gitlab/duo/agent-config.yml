@@ -1,0 +1,4 @@
+# Runtime for Duo Agent Platform flows executed on GitLab runners.
+image: python:3.12-slim
+setup_script:
+  - pip install -q -r requirements.txt

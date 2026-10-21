@@ -1,0 +1,8 @@
+[
+ {"id": "refund-policy", "text": "Refunds are available within 30 days of purchase for annual plans. Monthly plans are not refundable but can be cancelled anytime."},
+ {"id": "sso", "text": "Single sign-on (SAML and OIDC) is available on the Business and Enterprise plans only."},
+ {"id": "data-region", "text": "Customer data is stored in the EU (Frankfurt) or US (Iowa) region, chosen at signup. Region cannot be changed later without a support-assisted migration."},
+ {"id": "uptime", "text": "The Enterprise plan includes a 99.95% monthly uptime SLA with service credits. Other plans have no SLA."},
+ {"id": "api-limits", "text": "The public API allows 600 requests per minute per workspace. Bursts above that receive HTTP 429 with a Retry-After header."},
+ {"id": "pricing", "text": "Starter costs $9 per user per month, Business costs $29 per user per month, Enterprise is custom priced."}
+]
