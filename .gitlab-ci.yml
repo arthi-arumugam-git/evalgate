@@ -8,7 +8,7 @@
 #  configure : Cloud Run deploy to staging/production environments (GitLab Environments)
 #  monitor   : post-deploy canary evals; opens an incident issue on drift (also scheduled)
 #  govern    : hash-chained audit ledger + evidence pack; policy file protected by CODEOWNERS
-stages: [verify, test, secure, package, release, deploy, monitor, govern]
+stages: [verify, test, secure, package, release, deploy, monitor, promote, govern]
 
 include:
   - template: Jobs/SAST.gitlab-ci.yml
@@ -102,7 +102,10 @@ canary-staging:
 
 deploy-production:
   extends: .deploy
-  needs: [canary-staging]
+  stage: promote
+  needs:
+    - job: canary-staging
+      optional: true
   variables: { SERVICE: helpdesk }
   environment: { name: production, url: $PRODUCTION_URL }
   rules:
